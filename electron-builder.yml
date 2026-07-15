@@ -1,0 +1,33 @@
+appId: com.deskpet.app
+productName: DesktopPet
+copyright: Copyright 2026
+
+directories:
+  output: release4
+  buildResources: resources
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - models/**/*
+  - externals/**/*
+
+extraResources:
+  - from: resources/icon.png
+    to: icon.png
+
+asar: true
+asarUnpack:
+  - "models/**/*"
+  - "externals/**/*"
+
+win:
+  target:
+    - target: portable
+      arch: [x64]
+  icon: resources/icon.ico
+  sign: null
+  signAndEditExecutable: false
+
+portable:
+  artifactName: DesktopPet-portable.exe

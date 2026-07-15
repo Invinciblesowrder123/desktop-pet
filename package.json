@@ -1,0 +1,31 @@
+{
+  "name": "desktop-pet",
+  "version": "1.0.0",
+  "description": "可爱的二次元桌宠",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "build": "vue-tsc --noEmit && vite build && electron-builder",
+    "build:portable": "vue-tsc --noEmit && vite build && electron-builder --win portable",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "auto-launch": "^5.0.6",
+    "live2d-widget-model-haru": "^1.0.5",
+    "pixi-live2d-display": "^0.4.0",
+    "pixi.js": "^6.5.10",
+    "url": "^0.11.4",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vite-plugin-electron": "^0.28.8",
+    "vite-plugin-electron-renderer": "^0.14.6",
+    "vue-tsc": "^2.2.0"
+  }
+}
