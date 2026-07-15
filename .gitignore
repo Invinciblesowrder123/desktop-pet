@@ -5,5 +5,11 @@ release/
 release2/
 release3/
 release4/
+release5/
+build-out/
+out/
 *.log
 .DS_Store
+# Live2D Editor 源工程文件，运行时不需要
+*.cmo3
+*.can3

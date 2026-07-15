@@ -20,6 +20,12 @@ const emit = defineEmits<{
   (e: 'loaded'): void
 }>()
 
+// 默认模型目录：放在 models/hiyori_pro/ 下（Cubism4 粉发模型）
+// 运行期可通过右键菜单“切换形象”更换，选择会被主进程持久化
+const DEFAULT_MODEL_DIR = 'hiyori_pro'
+// 当前实际加载的模型目录，由主进程偏好或右键菜单决定
+let currentModelDir = DEFAULT_MODEL_DIR
+
 let app: PIXI.Application | null = null
 let model: Live2DModel<InternalModel> | null = null
 const WIDTH = 500
@@ -28,16 +34,23 @@ const dialogEngine = new DialogEngine()
 let clickCount = 0
 let lastClickTime = 0
 
-const idleMotions = ['idle_00', 'idle_01', 'idle_02']
+// 尝试按一组候选动作组名播放，命中第一个存在的；idx 按候选轮转
+async function tryMotion(candidates: string[], idx = 0, priority = MotionPriority.FORCE): Promise<boolean> {
+  if (!model) return false
+  for (const group of candidates) {
+    try {
+      await model.motion(group, idx, priority)
+      return true
+    } catch {
+      // 该组不存在或越界，继续尝试下一个
+    }
+  }
+  return false
+}
 
 function playRandomIdle() {
-  if (!model) return
-  try {
-    const idx = Math.floor(Math.random() * idleMotions.length)
-    model.motion('idle', idx, MotionPriority.IDLE)
-  } catch {
-    // idle motion group may not exist
-  }
+  // Cubism2 haru 用 'idle'，Cubism4 Hiyori 用 'Idle'
+  tryMotion(['idle', 'Idle'], Math.floor(Math.random() * 3), MotionPriority.IDLE)
 }
 
 let idleInterval: ReturnType<typeof setInterval> | null = null
@@ -46,32 +59,57 @@ function showChat(text: string) {
   emit('chat', text, { x: WIDTH / 2, y: HEIGHT * 0.08 })
 }
 
-async function initPet() {
-  if (!canvasRef.value) return
+// 加载指定形象目录的模型。可在运行期多次调用以切换形象。
+// 加载前会销毁当前模型（若有）。
+async function loadModel(dir: string) {
+  if (!app) return
+  showChat(`正在加载 ${dir} ...请稍等~`)
 
-  showChat('正在加载模型...请稍等~')
-
-  app = new PIXI.Application({
-    view: canvasRef.value,
-    width: WIDTH,
-    height: HEIGHT,
-    backgroundAlpha: 0,
-    antialias: false,
-    resolution: window.devicePixelRatio || 1,
-    autoDensity: true,
-    preserveDrawingBuffer: true,
-  })
+  // 销毁旧模型
+  if (model) {
+    try {
+      app.stage.removeChild(model as any)
+      ;(model as any).destroy({ children: true, texture: true, baseTexture: true })
+    } catch {
+      // ignore
+    }
+    model = null
+  }
 
   try {
     let modelPath: string
-    if (window.electronAPI?.getModelsPath) {
-      const modelsPath = await window.electronAPI.getModelsPath()
-      const normalized = modelsPath.replace(/\\/g, '/').replace(/^\//, '')
-      modelPath = 'file:///' + normalized + '/haru/haru01.model.json'
+    if (window.electronAPI?.getModelFile) {
+      const rel = await window.electronAPI.getModelFile(dir)
+      if (!rel) {
+        throw new Error(`在 models/${dir}/ 下未找到 .model3.json 或 .model.json`)
+      }
+      if (import.meta.env.DEV) {
+        // 开发模式：通过 Vite 中间件以 http 提供，避免跨域拦截 file://
+        modelPath = `/models/${rel}`
+      } else {
+        // 打包模式：页面来源 file://，直接读本地文件
+        const modelsPath = await window.electronAPI.getModelsPath()
+        const normalized = modelsPath.replace(/\\/g, '/').replace(/^\//, '')
+        modelPath = 'file:///' + normalized + '/' + rel
+      }
     } else {
-      modelPath = import.meta.env.DEV
-        ? '/models/haru/haru01.model.json'
-        : './models/haru/haru01.model.json'
+      const prefix = import.meta.env.DEV ? '/models/' : './models/'
+      const candidates = [
+        'Hiyori.model3.json',
+        'hiyori_pro_t11.model3.json',
+        'hiyori.model3.json',
+        'haru01.model.json',
+      ]
+      let found: string | null = null
+      for (const c of candidates) {
+        const url = `${prefix}${dir}/${c}`
+        try {
+          const ok = await fetch(url, { method: 'HEAD' })
+          if (ok.ok) { found = url; break }
+        } catch { /* ignore */ }
+      }
+      if (!found) throw new Error(`未在 ${prefix}${dir}/ 下找到模型文件`)
+      modelPath = found
     }
 
     model = await Live2DModel.from(modelPath)
@@ -93,59 +131,85 @@ async function initPet() {
     app.stage.addChild(model as any)
 
     // 点击交互 — hit 事件由 pixi-live2d-display 触发
+    // 根据点击区域触发不同动作。不同模型动作组名不同，逐一兼容：
+    //   Haru(Cubism2):  flick_head / tap_body / pinch_in / pinch_out / shake
+    //   Hiyori(Cubism4): FlickHead / TapBody
     model.on('hit', (hitAreas: string[]) => {
       const now = Date.now()
       if (now - lastClickTime > 2000) clickCount = 0
       clickCount++
       lastClickTime = now
 
-      const area = hitAreas.length > 0 ? hitAreas[0] : 'body'
+      const raw = hitAreas.length > 0 ? hitAreas[0] : 'body'
+      const area = raw.toLowerCase()
+      const isHead = area.includes('head')
 
-      // 根据点击区域触发不同动作
-      try {
-        if (area === 'head') {
-          // 摸头 -> 甩头动作
-          model!.motion('flick_head', 0, MotionPriority.FORCE)
-          const dialogs = ['嘻嘻，别摸头啦~', '好痒呀！', '再摸就长不高了啦~', '唔...轻一点嘛']
-          showChat(dialogs[Math.floor(Math.random() * dialogs.length)])
-          return
-        }
-        // 点击身体 -> 随机互动动作
-        const bodyMotions = ['tap_body', 'pinch_in', 'pinch_out', 'shake']
-        const motion = bodyMotions[Math.floor(Math.random() * bodyMotions.length)]
-        const idx = motion === 'tap_body' ? Math.floor(Math.random() * 3) : 0
-        model!.motion(motion, idx, MotionPriority.FORCE)
-      } catch {
-        // fallback
+      if (isHead) {
+        tryMotion(['flick_head', 'FlickHead', 'head'], 0)
+        const dialogs = ['嘻嘻，别摸头啦~', '好痒呀！', '再摸就长不高了啦~', '唔...轻一点嘛']
+        showChat(dialogs[Math.floor(Math.random() * dialogs.length)])
+        return
       }
 
-      const dialog = dialogEngine.getResponse(area, clickCount, clickCount >= 5)
+      // 点击身体：随机选择一组存在的互动动作
+      const idx = Math.floor(Math.random() * 3)
+      tryMotion(['tap_body', 'TapBody', 'pinch_in', 'shake', 'pinch_out'], idx)
+
+      const dialog = dialogEngine.getResponse(isHead ? 'head' : 'body', clickCount, clickCount >= 5)
       showChat(dialog)
     })
 
+    currentModelDir = dir
     emit('loaded')
-
-    // Setup drag & click-through
-    const { setupDrag } = useWindowDrag(canvasRef.value!)
-    const { setupClickThrough } = useClickThrough(canvasRef.value!, app)
-    setupDrag()
-    setupClickThrough()
-
-    // Right-click context menu
-    canvasRef.value!.addEventListener('contextmenu', (e) => {
-      e.preventDefault()
-      window.electronAPI?.showContextMenu()
-    })
-
-    // 空闲时随机播放 idle 动作
-    idleInterval = setInterval(() => {
-      playRandomIdle()
-    }, 8000 + Math.random() * 6000)
-
   } catch (err: any) {
     console.error('[Pet] Failed to load model:', err.message || err)
     showChat('加载失败: ' + (err.message || '未知错误').substring(0, 30) + '... 请检查文件~')
   }
+}
+
+async function initPet() {
+  if (!canvasRef.value) return
+
+  app = new PIXI.Application({
+    view: canvasRef.value,
+    width: WIDTH,
+    height: HEIGHT,
+    backgroundAlpha: 0,
+    antialias: false,
+    resolution: window.devicePixelRatio || 1,
+    autoDensity: true,
+    preserveDrawingBuffer: true,
+  })
+
+  // Setup drag & click-through（仅一次）
+  const { setupDrag } = useWindowDrag(canvasRef.value!)
+  const { setupClickThrough } = useClickThrough(canvasRef.value!, app)
+  setupDrag()
+  setupClickThrough()
+
+  // Right-click context menu（仅一次）
+  canvasRef.value.addEventListener('contextmenu', (e) => {
+    e.preventDefault()
+    window.electronAPI?.showContextMenu()
+  })
+
+  // 空闲时随机播放 idle 动作（仅一次，作用于当前 model）
+  idleInterval = setInterval(() => {
+    playRandomIdle()
+  }, 8000 + Math.random() * 6000)
+
+  // 监听右键菜单触发的形象切换
+  window.electronAPI?.onSwitchModel?.((dir: string) => {
+    loadModel(dir)
+  })
+
+  // 启动时加载主进程记录的当前形象（可能已从偏好恢复）
+  let dir = DEFAULT_MODEL_DIR
+  if (window.electronAPI?.getCurrentModel) {
+    const saved = await window.electronAPI.getCurrentModel()
+    if (saved) dir = saved
+  }
+  await loadModel(dir)
 }
 
 onMounted(() => {

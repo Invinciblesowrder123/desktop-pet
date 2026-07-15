@@ -37,6 +37,8 @@ function onChat(text: string, position: { x: number; y: number }) {
 }
 
 function onLoaded() {
+  // 切换形象会再次触发 loaded，先清理旧计时器避免重复
+  if (idleTimer) { clearInterval(idleTimer); idleTimer = null }
   idleTimer = setInterval(() => {
     const dialog = dialogEngine.getIdleDialog()
     if (dialog) {

@@ -3,7 +3,7 @@ productName: DesktopPet
 copyright: Copyright 2026
 
 directories:
-  output: release4
+  output: build-out
   buildResources: resources
 
 files:
